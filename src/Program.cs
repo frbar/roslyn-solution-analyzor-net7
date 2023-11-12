@@ -1,16 +1,13 @@
 ﻿using System;
-using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
-using System.Text;
+using System.Reflection;
 using System.Threading.Tasks;
 using Microsoft.Build.Locator;
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
-using Microsoft.CodeAnalysis.CSharp.Symbols;
-using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.FindSymbols;
 using Microsoft.CodeAnalysis.MSBuild;
-using Microsoft.CodeAnalysis.Text;
 
 using static System.Console;
 
@@ -36,6 +33,7 @@ namespace LoadSolutionForAnalysis
             MSBuildLocator.RegisterInstance(instance);
 
             using MSBuildWorkspace workspace = MSBuildWorkspace.Create();
+
             // Print message for WorkspaceFailed event to help diagnosing project load failures.
             workspace.WorkspaceFailed += (o, e) => WriteLine(e.Diagnostic.Message);
 
@@ -47,19 +45,59 @@ namespace LoadSolutionForAnalysis
             WriteLine($"Finished loading solution '{solutionPath}'");
 
             // TODO: Do analysis on the projects in the loaded solution
-            foreach (Project project in solution.Projects)
+
+            var projectName = args[1];
+            var className = args[2];
+            var propertyName = args[3];
+
+            var project = solution.Projects.SingleOrDefault(p => p.Name == projectName);
+
+            if (project == null)
             {
-                WriteLine($"Project: {project.Name}");
-                foreach (Document document in project.Documents)
+                WriteLine($"Project {projectName} not found");
+                return;
+            }
+
+            var compilation = await project.GetCompilationAsync();
+            var propertiesForName = compilation.GetSymbolsWithName(s => s.StartsWith(propertyName), SymbolFilter.All);
+            var myProperty = propertiesForName.FirstOrDefault(x => x.Kind == SymbolKind.Property && x.ContainingType.Name == className);
+            if (myProperty == null)
+            {
+                WriteLine("Property not found");
+                return;
+            }
+
+            var callers = await SymbolFinder.FindReferencesAsync(myProperty, solution);
+
+            foreach(var caller in callers)
+            {
+                if (caller.Locations.Any())
                 {
-                    WriteLine($"  - {document.Name}");
+                    foreach(var refLocation in caller.Locations)
+                    {
+                        WriteLine(myProperty.Name + " is referenced at line " + refLocation.Location.GetLineSpan().StartLinePosition.Line);
+                        WriteLine("  in file " + refLocation.Document.FilePath);
+
+                        // get AdditionalProperties by reflection on refLocation
+                        var additionalProperties = refLocation.GetType()
+                                                              .GetProperties(BindingFlags.NonPublic | BindingFlags.Instance)
+                                                              .Where(p => p.Name == "AdditionalProperties")
+                                                              .FirstOrDefault();
+                        if (additionalProperties != null)
+                        {
+                            var value = additionalProperties.GetValue(refLocation) as ImmutableDictionary<string, string>;
+                            var callerType = value["ContainingTypeInfo"];
+
+                            WriteLine("  from type " + callerType);
+                        }
+                    }
                 }
             }
         }
 
         private static VisualStudioInstance SelectVisualStudioInstance(VisualStudioInstance[] visualStudioInstances)
         {
-            WriteLine("Multiple installs of MSBuild detected please select one:");
+            WriteLine("Multiple installs of MSBuild detected:");
             for (int i = 0; i < visualStudioInstances.Length; i++)
             {
                 WriteLine($"Instance {i + 1}");
@@ -67,6 +105,7 @@ namespace LoadSolutionForAnalysis
                 WriteLine($"    Version: {visualStudioInstances[i].Version}");
                 WriteLine($"    MSBuild Path: {visualStudioInstances[i].MSBuildPath}");
             }
+            WriteLine("Please select one: ");
 
             while (true)
             {

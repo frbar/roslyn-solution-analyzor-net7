@@ -9,7 +9,16 @@
 
 Based on this sample you can read & analyze other solutions by **Roslyn**.
 
+# Get Started
+
 ```
-dotnet build
-dotnet run --project .\LoadSolutionForAnalysis\ "path\to\your\solution.sln"
+dotnet build src
+dotnet run --project .\src\LoadSolutionForAnalysis\ "path\to\your\solution.sln"
+```
+
+# Docker support
+
+```
+docker build -t load-solution-for-analysis .
+docker run load-solution-for-analysis
 ```
